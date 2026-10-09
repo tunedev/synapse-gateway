@@ -85,3 +85,14 @@ async fn a_decision_without_args_hash_is_refused_and_not_recorded() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(store.guards.lock().is_empty());
 }
+
+#[tokio::test]
+async fn a_decision_of_another_type_is_refused_and_not_recorded() {
+    let (gw, store) = gateway();
+    let mut body: serde_json::Value = serde_json::from_str(WIRE).unwrap();
+    body["type"] = "bogus".into();
+    let res = router(gw).oneshot(post(&body.to_string())).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(store.guards.lock().is_empty());
+}

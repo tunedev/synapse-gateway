@@ -95,6 +95,20 @@ impl UsageEvent {
 /// Marketplace ledger discriminator (`attributes.EventType`) for guard decisions.
 pub const GUARD_DECISION_EVENT_TYPE: &str = "Ledger.GuardDecision";
 
+/// The only `type` a guard decision carries on the wire: `guard_decision`.
+/// Any other value fails to decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GuardDecisionType {
+    #[serde(rename = "guard_decision")]
+    GuardDecision,
+}
+
+impl GuardDecisionType {
+    pub fn as_str(self) -> &'static str {
+        "guard_decision"
+    }
+}
+
 /// One guard decision as the deciding component reports it. Carries no prompt
 /// or argument content: `args_hash` is the sha256 hex of the canonical JSON of
 /// the guard's input.
@@ -111,9 +125,9 @@ pub struct GuardDecision {
     /// Unique per decision.
     pub request_id: String,
     pub timestamp: DateTime<Utc>,
-    /// Always `guard_decision`.
+    /// Decodes only as `guard_decision`.
     #[serde(rename = "type")]
-    pub event_type: String,
+    pub event_type: GuardDecisionType,
     /// Pipeline position, e.g. `route`.
     pub slot: String,
     pub guard: String,
@@ -133,7 +147,7 @@ impl GuardDecision {
             ("EventType", GUARD_DECISION_EVENT_TYPE.to_string()),
             ("namespace", self.namespace.clone()),
             ("requestId", self.request_id.clone()),
-            ("type", self.event_type.clone()),
+            ("type", self.event_type.as_str().to_string()),
             ("guard", self.guard.clone()),
             ("verdict", self.verdict.clone()),
         ]
@@ -285,6 +299,7 @@ mod tests {
         let attrs = decision.attributes();
         assert_eq!(attrs[0], ("EventType", "Ledger.GuardDecision".to_string()));
         assert!(attrs.contains(&("namespace", "acme".to_string())));
+        assert!(attrs.contains(&("type", "guard_decision".to_string())));
         assert!(attrs.contains(&("verdict", "delegate".to_string())));
     }
 }
