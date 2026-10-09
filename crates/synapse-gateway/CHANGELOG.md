@@ -38,12 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overflow is folded into an `otel_metric_overflow="true"` series.
 - `synapse_passthrough_total` from the Gemini passthrough now carries
   `provider="vertex"`, matching the Jev passthrough's label set.
+- `vertex_native::vertex_chunk_to_items` takes a third argument,
+  `&routing::tool_call_ids::ToolCallIds`, the stream's tool-call id source.
 
 ### Fixed
 
 - Grafana dashboard latency panels (`histogram_quantile` over
   `*_duration_seconds_bucket`) now show data; the previous exporter emitted
   summaries, so they were empty.
+- Tool-call ids are unique across responses. The native Vertex lane keeps
+  Gemini's `functionCall.id` when present and otherwise emits
+  `call_<32 hex>_<index>` instead of `call_<index>`. The standard lane
+  replaces genai's Gemini ids (`call#<fn>#<n>`) the same way, which also
+  stops two calls to one function in separate chunks from merging. Ids from
+  other providers pass through unchanged.
 
 ## [0.5.37] - 2026-09-26
 
