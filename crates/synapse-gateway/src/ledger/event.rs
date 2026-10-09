@@ -4,7 +4,7 @@
 //! tenancy as `namespace`, a `type` discriminator, RFC3339 timestamp.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ledger::UsageEntry;
 
@@ -91,6 +91,59 @@ impl UsageEvent {
         ]
     }
 }
+
+/// Marketplace ledger discriminator (`attributes.EventType`) for guard decisions.
+pub const GUARD_DECISION_EVENT_TYPE: &str = "Ledger.GuardDecision";
+
+/// One guard decision as the deciding component reports it. Carries no prompt
+/// or argument content: `args_hash` is the sha256 hex of the canonical JSON of
+/// the guard's input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuardDecision {
+    /// Tenant, named `namespace` as on `UsageEvent`.
+    pub namespace: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// The agent run (thread) the decision belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Unique per decision.
+    pub request_id: String,
+    pub timestamp: DateTime<Utc>,
+    /// Always `guard_decision`.
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// Pipeline position, e.g. `route`.
+    pub slot: String,
+    pub guard: String,
+    pub policy: String,
+    pub verdict: String,
+    /// The guard's raw score; absent when the guard produced none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    pub latency_ms: u64,
+    pub args_hash: String,
+}
+
+impl GuardDecision {
+    /// Broker message attributes for subscription filtering.
+    pub fn attributes(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("EventType", GUARD_DECISION_EVENT_TYPE.to_string()),
+            ("namespace", self.namespace.clone()),
+            ("requestId", self.request_id.clone()),
+            ("type", self.event_type.clone()),
+            ("guard", self.guard.clone()),
+            ("verdict", self.verdict.clone()),
+        ]
+    }
+}
+
+/// The guard decision wire JSON, identical to the literal in marketplace
+/// `libs/infrastructure/telemetry/src/lib/guardDecision.spec.ts`.
+#[cfg(test)]
+pub(crate) const WIRE: &str = r#"{"namespace":"acme","workspace":"ws-9","runId":"thread-1","requestId":"6f1c2b9e-1d2a-4c55-9f0e-3b7a2d1c4e88","timestamp":"2026-10-09T12:00:00Z","type":"guard_decision","slot":"route","guard":"harness_intent","policy":"harness-intent","verdict":"delegate","score":0.97,"latencyMs":84,"argsHash":"8832acbc74cc8fd7c43b6cbd7d7ffa2eaa483de177cef59a6adc46cd5c503e1c"}"#;
 
 #[cfg(test)]
 mod tests {
@@ -201,5 +254,37 @@ mod tests {
         );
         assert_eq!(attrs[0].1, LEDGER_EVENT_TYPE);
         assert_eq!(attrs[1].1, "acme");
+    }
+
+    #[test]
+    fn guard_decision_round_trips_the_wire_json() {
+        let decision: GuardDecision = serde_json::from_str(WIRE).unwrap();
+        assert_eq!(decision.latency_ms, 84);
+        assert_eq!(decision.score, Some(0.97));
+        assert_eq!(
+            serde_json::to_value(&decision).unwrap(),
+            serde_json::from_str::<serde_json::Value>(WIRE).unwrap()
+        );
+    }
+
+    #[test]
+    fn guard_decision_without_a_score_omits_it() {
+        let mut v: serde_json::Value = serde_json::from_str(WIRE).unwrap();
+        v.as_object_mut().unwrap().remove("score");
+        let decision: GuardDecision = serde_json::from_value(v).unwrap();
+        assert_eq!(decision.score, None);
+        assert!(serde_json::to_value(&decision)
+            .unwrap()
+            .get("score")
+            .is_none());
+    }
+
+    #[test]
+    fn guard_decision_attributes_route_it_to_the_ledger_subscription() {
+        let decision: GuardDecision = serde_json::from_str(WIRE).unwrap();
+        let attrs = decision.attributes();
+        assert_eq!(attrs[0], ("EventType", "Ledger.GuardDecision".to_string()));
+        assert!(attrs.contains(&("namespace", "acme".to_string())));
+        assert!(attrs.contains(&("verdict", "delegate".to_string())));
     }
 }

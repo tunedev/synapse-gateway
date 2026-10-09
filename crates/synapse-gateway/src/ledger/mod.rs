@@ -11,6 +11,8 @@ use tokio::sync::mpsc;
 
 use crate::telemetry::GatewayMetrics;
 
+use crate::ledger::event::GuardDecision;
+
 pub mod connect;
 pub mod event;
 #[cfg(feature = "ledger-postgres")]
@@ -59,6 +61,17 @@ pub enum LedgerError {
 #[async_trait]
 pub trait LedgerStore: Send + Sync {
     async fn record(&self, entry: &UsageEntry) -> Result<(), LedgerError>;
+
+    /// Records a guard decision. Sinks with no guard-decision destination ignore it.
+    async fn record_guard(&self, _decision: &GuardDecision) -> Result<(), LedgerError> {
+        Ok(())
+    }
+}
+
+/// What the background writer drains.
+enum LedgerRecord {
+    Usage(UsageEntry),
+    Guard(GuardDecision),
 }
 
 /// Discards all usage events. Used when no ledger sink could be connected.
@@ -75,7 +88,7 @@ impl LedgerStore for NoopLedger {
 /// Fire-and-forget handle. Cloneable; the hot path calls `enqueue`.
 #[derive(Clone)]
 pub struct LedgerHandle {
-    tx: mpsc::Sender<UsageEntry>,
+    tx: mpsc::Sender<LedgerRecord>,
     metrics: Arc<GatewayMetrics>,
 }
 
@@ -92,15 +105,21 @@ impl LedgerHandle {
         capacity: usize,
         metrics: Arc<GatewayMetrics>,
     ) -> Self {
-        let (tx, mut rx) = mpsc::channel::<UsageEntry>(capacity);
+        let (tx, mut rx) = mpsc::channel::<LedgerRecord>(capacity);
         let writer_metrics = metrics.clone();
         tokio::spawn(async move {
-            while let Some(entry) = rx.recv().await {
-                if let Err(e) = store.record(&entry).await {
+            while let Some(record) = rx.recv().await {
+                let (result, tenant, request_id) = match &record {
+                    LedgerRecord::Usage(e) => (store.record(e).await, &e.tenant, &e.request_id),
+                    LedgerRecord::Guard(d) => {
+                        (store.record_guard(d).await, &d.namespace, &d.request_id)
+                    }
+                };
+                if let Err(e) = result {
                     tracing::warn!(
                         error = %e,
-                        tenant = %entry.tenant,
-                        request_id = %entry.request_id,
+                        tenant = %tenant,
+                        request_id = %request_id,
                         "ledger write failed"
                     );
                     writer_metrics.ledger_error("writer");
@@ -113,7 +132,16 @@ impl LedgerHandle {
 
     /// Non-blocking enqueue. Never awaits the write; drops + counts on full.
     pub fn enqueue(&self, entry: UsageEntry) {
-        if self.tx.try_send(entry).is_err() {
+        self.send(LedgerRecord::Usage(entry));
+    }
+
+    /// Non-blocking enqueue of a guard decision; same drop policy as `enqueue`.
+    pub fn enqueue_guard(&self, decision: GuardDecision) {
+        self.send(LedgerRecord::Guard(decision));
+    }
+
+    fn send(&self, record: LedgerRecord) {
+        if self.tx.try_send(record).is_err() {
             self.metrics.ledger_dropped();
         }
     }
@@ -123,6 +151,7 @@ impl LedgerHandle {
 #[derive(Default)]
 pub struct InMemoryLedger {
     pub entries: Mutex<Vec<UsageEntry>>,
+    pub guards: Mutex<Vec<GuardDecision>>,
 }
 
 impl InMemoryLedger {
@@ -137,6 +166,11 @@ impl InMemoryLedger {
 impl LedgerStore for InMemoryLedger {
     async fn record(&self, entry: &UsageEntry) -> Result<(), LedgerError> {
         self.entries.lock().push(entry.clone());
+        Ok(())
+    }
+
+    async fn record_guard(&self, decision: &GuardDecision) -> Result<(), LedgerError> {
+        self.guards.lock().push(decision.clone());
         Ok(())
     }
 }
@@ -171,6 +205,18 @@ impl LedgerStore for FanoutLedger {
         let futs = self.sinks.iter().map(|(label, sink)| async move {
             if let Err(e) = sink.record(entry).await {
                 tracing::warn!(backend = label, error = %e, tenant = %entry.tenant, "ledger sink write failed");
+                metrics.ledger_error(label);
+            }
+        });
+        join_all(futs).await;
+        Ok(())
+    }
+
+    async fn record_guard(&self, decision: &GuardDecision) -> Result<(), LedgerError> {
+        let metrics = &self.metrics;
+        let futs = self.sinks.iter().map(|(label, sink)| async move {
+            if let Err(e) = sink.record_guard(decision).await {
+                tracing::warn!(backend = label, error = %e, tenant = %decision.namespace, "ledger sink write failed");
                 metrics.ledger_error(label);
             }
         });
@@ -338,5 +384,37 @@ mod tests {
             r#"synapse_ledger_errors_total{backend="fail"} 1"#,
         )
         .await;
+    }
+
+    fn decision() -> crate::ledger::event::GuardDecision {
+        serde_json::from_str(crate::ledger::event::WIRE).unwrap()
+    }
+
+    #[tokio::test]
+    async fn handle_drains_guard_decisions_into_store() {
+        let store = Arc::new(InMemoryLedger::default());
+        let handle = LedgerHandle::spawn(store.clone(), 16);
+        handle.enqueue_guard(decision());
+        for _ in 0..50 {
+            if store.guards.lock().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(*store.guards.lock(), vec![decision()]);
+        assert!(store.entries.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fanout_records_guard_decisions_to_all_sinks() {
+        let a = Arc::new(InMemoryLedger::default());
+        let b = Arc::new(InMemoryLedger::default());
+        let fanout = FanoutLedger::new(vec![
+            ("a", a.clone() as Arc<dyn LedgerStore>),
+            ("b", b.clone() as Arc<dyn LedgerStore>),
+        ]);
+        fanout.record_guard(&decision()).await.unwrap();
+        assert_eq!(a.guards.lock().len(), 1);
+        assert_eq!(b.guards.lock().len(), 1);
     }
 }

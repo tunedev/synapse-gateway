@@ -1,7 +1,6 @@
 //! GCP Pub/Sub ledger backend (feature `ledger-pubsub`). Mirrors the publisher
 //! mechanics of `talos-core/src/tool_events.rs`.
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -9,7 +8,7 @@ use backon::{ExponentialBuilder, Retryable};
 use google_cloud_pubsub::client::{Client, ClientConfig};
 use google_cloud_pubsub::topic::Topic;
 
-use crate::ledger::event::UsageEvent;
+use crate::ledger::event::{GuardDecision, UsageEvent};
 use crate::ledger::{LedgerError, LedgerStore, UsageEntry};
 
 const PUBSUB_CONNECT_MAX_ATTEMPTS: usize = 8;
@@ -91,30 +90,46 @@ pub(crate) fn is_retryable_pubsub_connect_error(err: &LedgerError) -> bool {
         || m.contains("network")
 }
 
-#[async_trait]
-impl LedgerStore for PubsubLedger {
-    async fn record(&self, e: &UsageEntry) -> Result<(), LedgerError> {
+impl PubsubLedger {
+    async fn publish(
+        &self,
+        data: Vec<u8>,
+        attributes: Vec<(&'static str, String)>,
+        ordering_key: String,
+    ) -> Result<(), LedgerError> {
         use google_cloud_googleapis::pubsub::v1::PubsubMessage;
 
-        let event = UsageEvent::from(e);
-        let data = serde_json::to_vec(&event).map_err(|e| LedgerError::Backend(e.to_string()))?;
-        let attributes: HashMap<String, String> = event
-            .attributes()
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect();
         let msg = PubsubMessage {
             data,
-            attributes,
-            ordering_key: event.request_id.clone(),
+            attributes: attributes
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+            ordering_key,
             ..Default::default()
         };
-        let publisher = self.topic.new_publisher(None);
-        publisher
+        self.topic
+            .new_publisher(None)
             .publish_immediately(vec![msg], None)
             .await
             .map_err(|e| LedgerError::Backend(format!("pubsub publish: {e}")))?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl LedgerStore for PubsubLedger {
+    async fn record(&self, e: &UsageEntry) -> Result<(), LedgerError> {
+        let event = UsageEvent::from(e);
+        let data = serde_json::to_vec(&event).map_err(|e| LedgerError::Backend(e.to_string()))?;
+        self.publish(data, event.attributes(), event.request_id.clone())
+            .await
+    }
+
+    async fn record_guard(&self, decision: &GuardDecision) -> Result<(), LedgerError> {
+        let data = serde_json::to_vec(decision).map_err(|e| LedgerError::Backend(e.to_string()))?;
+        self.publish(data, decision.attributes(), decision.request_id.clone())
+            .await
     }
 }
 
