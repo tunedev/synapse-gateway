@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `POST /v1/guard/decisions`: records a caller's guard decision (`GuardDecision`, `EventType` `Ledger.GuardDecision`) on the ledger. Published by the Pub/Sub sink; other sinks ignore it.
 - `telemetry` module: `GatewayMetrics` (all gateway instruments, built from any
   OpenTelemetry `Meter`; `GatewayMetrics::noop()` records nothing),
   `seconds_histogram` and `SECONDS_BUCKETS`; with the `server` feature,

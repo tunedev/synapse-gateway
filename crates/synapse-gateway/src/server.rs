@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -12,6 +12,7 @@ use serde_json::json;
 
 use crate::error::GatewayError;
 use crate::gateway::{Gateway, GuardedStream, RequestCtx};
+use crate::ledger::event::GuardDecision;
 use crate::routing::request::ChatRequest;
 use crate::routing::stream::{stream_item_to_sse_json, Accumulator, StreamItem};
 
@@ -26,6 +27,7 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/embeddings", post(embeddings))
+        .route("/v1/guard/decisions", post(record_guard_decision))
         // Gemini-native passthrough: `@google/generative-ai` / `@google/genai`
         // clients pointed at the gateway via GOOGLE_VERTEX_BASE_URL. The three
         // prefixes cover the SDK `apiVersion` values in use (default v1beta,
@@ -66,6 +68,16 @@ async fn list_models(State(st): State<AppState>) -> impl IntoResponse {
         .map(|id| json!({ "id": id, "object": "model", "owned_by": "synapse" }))
         .collect::<Vec<_>>();
     Json(json!({ "object": "list", "data": data }))
+}
+
+/// Records a caller's guard decision on the ledger (`Ledger.GuardDecision`).
+/// The body is the wire event; it is enqueued unchanged and never awaited.
+async fn record_guard_decision(
+    State(st): State<AppState>,
+    Json(decision): Json<GuardDecision>,
+) -> StatusCode {
+    st.gateway.ledger.enqueue_guard(decision);
+    StatusCode::ACCEPTED
 }
 
 async fn chat_completions(
