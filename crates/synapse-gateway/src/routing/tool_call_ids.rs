@@ -1,7 +1,7 @@
 //! Tool-call ids for upstreams that do not supply ids unique across responses.
 
 /// Mints `<prefix>_<index>` ids. The prefix is random per response, so no two
-/// responses share a tool-call id.
+/// responses share a minted id.
 #[derive(Debug, Clone)]
 pub struct ToolCallIds {
     prefix: String,
