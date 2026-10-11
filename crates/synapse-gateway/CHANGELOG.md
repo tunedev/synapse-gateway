@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replaces genai's Gemini ids (`call#<fn>#<n>`) the same way, which also
   stops two calls to one function in separate chunks from merging. Ids from
   other providers pass through unchanged.
+- The native Vertex lane sends tool-call ids back to Gemini on the next turn:
+  an assistant `tool_calls[].id` becomes `functionCall.id` and a tool
+  message's `tool_call_id` becomes `functionResponse.id`, so parallel calls to
+  one function match their results.
 
 ## [0.5.37] - 2026-09-26
 

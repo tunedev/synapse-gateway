@@ -383,7 +383,11 @@ fn build_payload(req: &ChatRequest, ext: &VertexExt) -> Value {
                         let name = f.get("name")?.as_str()?;
                         let raw = f.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
                         let args: Value = serde_json::from_str(raw).unwrap_or_else(|_| json!({}));
-                        Some(json!({ "functionCall": { "name": name, "args": args } }))
+                        let mut call = json!({ "name": name, "args": args });
+                        if let Some(id) = tc.get("id").and_then(Value::as_str) {
+                            call["id"] = json!(id);
+                        }
+                        Some(json!({ "functionCall": call }))
                     })
                     .collect::<Vec<_>>();
                 contents.push(json!({ "role": "model", "parts": parts }));
@@ -395,8 +399,12 @@ fn build_payload(req: &ChatRequest, ext: &VertexExt) -> Value {
                     .as_str()
                     .map(|s| json!({ "content": s }))
                     .unwrap_or_else(|| json!({ "content": m.content.to_string() }));
+                let mut function_response = json!({ "name": name, "response": response });
+                if let Some(id) = &m.tool_call_id {
+                    function_response["id"] = json!(id);
+                }
                 contents.push(json!({ "role": "user", "parts": [
-                    { "functionResponse": { "name": name, "response": response } }
+                    { "functionResponse": function_response }
                 ]}));
             }
             role => {
@@ -687,6 +695,36 @@ mod tests {
         assert!(contents
             .iter()
             .any(|c| c["parts"][0]["functionResponse"]["name"].is_string()));
+    }
+
+    #[test]
+    fn payload_returns_call_ids_on_function_call_and_response() {
+        let r: ChatRequest = serde_json::from_value(serde_json::json!({
+            "model": "gemini-pro",
+            "messages": [
+                {"role": "user", "content": "weather in SF and NYC?"},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "fc-1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"c\":\"SF\"}"}},
+                    {"id": "fc-2", "type": "function", "function": {"name": "get_weather", "arguments": "{\"c\":\"NYC\"}"}},
+                    {"type": "function", "function": {"name": "get_time", "arguments": "{}"}}]},
+                {"role": "tool", "tool_call_id": "fc-1", "name": "get_weather", "content": "21C"},
+                {"role": "tool", "tool_call_id": "fc-2", "name": "get_weather", "content": "15C"},
+                {"role": "tool", "name": "get_time", "content": "noon"}
+            ]
+        })).unwrap();
+        let body = build_payload(&r, &VertexExt::default());
+        let contents = body["contents"].as_array().unwrap();
+
+        let calls = &contents[1]["parts"];
+        assert_eq!(calls[0]["functionCall"]["id"], "fc-1");
+        assert_eq!(calls[1]["functionCall"]["id"], "fc-2");
+        assert!(calls[2]["functionCall"].get("id").is_none());
+
+        assert_eq!(contents[2]["parts"][0]["functionResponse"]["id"], "fc-1");
+        assert_eq!(contents[3]["parts"][0]["functionResponse"]["id"], "fc-2");
+        assert!(contents[4]["parts"][0]["functionResponse"]
+            .get("id")
+            .is_none());
     }
 
     #[test]
