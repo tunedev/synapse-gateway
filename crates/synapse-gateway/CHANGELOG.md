@@ -46,8 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Grafana dashboard latency panels (`histogram_quantile` over
   `*_duration_seconds_bucket`) now show data; the previous exporter emitted
   summaries, so they were empty.
-- Gemini tool-call ids are unique across responses on both lanes. The native
-  Vertex lane keeps Gemini's `functionCall.id` when present and otherwise emits
+- Gemini tool-call ids the gateway mints are unique across responses on both
+  lanes. The native Vertex lane passes Gemini's `functionCall.id` through
+  unchanged when present and otherwise emits
   `call_<32 hex>_<index>` instead of `call_<index>`. The standard lane
   replaces genai's Gemini ids (`call#<fn>#<n>`) the same way, which also
   stops two calls to one function in separate chunks from merging. Ids from
