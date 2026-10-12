@@ -92,7 +92,7 @@ impl UsageEvent {
     }
 }
 
-/// Marketplace ledger discriminator (`attributes.EventType`) for guard decisions.
+/// Ledger discriminator (`attributes.EventType`) for guard decisions.
 pub const GUARD_DECISION_EVENT_TYPE: &str = "Ledger.GuardDecision";
 
 /// The only `type` a guard decision carries on the wire: `guard_decision`.
@@ -154,8 +154,7 @@ impl GuardDecision {
     }
 }
 
-/// The guard decision wire JSON, identical to the literal in marketplace
-/// `libs/infrastructure/telemetry/src/lib/guardDecision.spec.ts`.
+/// The guard decision wire JSON. Clients pin the same literal in their own wire tests.
 #[cfg(test)]
 pub(crate) const WIRE: &str = r#"{"namespace":"acme","workspace":"ws-9","runId":"thread-1","requestId":"6f1c2b9e-1d2a-4c55-9f0e-3b7a2d1c4e88","timestamp":"2026-10-09T12:00:00Z","type":"guard_decision","slot":"route","guard":"harness_intent","policy":"harness-intent","verdict":"delegate","score":0.97,"latencyMs":84,"argsHash":"8832acbc74cc8fd7c43b6cbd7d7ffa2eaa483de177cef59a6adc46cd5c503e1c"}"#;
 

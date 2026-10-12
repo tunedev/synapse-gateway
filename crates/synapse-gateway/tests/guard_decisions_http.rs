@@ -18,7 +18,7 @@ use synapse::routing::table::RouteTable;
 use synapse::server::router;
 use tower::ServiceExt;
 
-/// Identical to `WIRE` in `src/ledger/event.rs` and in marketplace `guardDecision.spec.ts`.
+/// Identical to `WIRE` in `src/ledger/event.rs`.
 const WIRE: &str = r#"{"namespace":"acme","workspace":"ws-9","runId":"thread-1","requestId":"6f1c2b9e-1d2a-4c55-9f0e-3b7a2d1c4e88","timestamp":"2026-10-09T12:00:00Z","type":"guard_decision","slot":"route","guard":"harness_intent","policy":"harness-intent","verdict":"delegate","score":0.97,"latencyMs":84,"argsHash":"8832acbc74cc8fd7c43b6cbd7d7ffa2eaa483de177cef59a6adc46cd5c503e1c"}"#;
 
 fn gateway() -> (Arc<Gateway>, Arc<InMemoryLedger>) {
